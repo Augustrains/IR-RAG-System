@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IR-RAG Chat</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1>IR-RAG</h1>
+        <button id="newChatBtn" class="secondary-btn">+ 新建聊天</button>
+      </div>
+      <div class="sidebar-note">
+        聊天记录默认保存到<br>
+        <code>/root/autodl-tmp/IR-RAG-System/data/chat_sessions</code>
+      </div>
+      <div id="chatList" class="chat-list"></div>
+    </aside>
+
+    <main class="main-panel">
+      <header class="topbar">
+        <div>
+          <div class="topbar-title">本地 RAG 对话页面</div>
+          <div id="chatMeta" class="topbar-meta">未选择聊天</div>
+        </div>
+        <div class="topbar-actions">
+          <button id="clearChatBtn" class="secondary-btn">清空当前聊天</button>
+          <button id="saveChatBtn" class="primary-btn">保存当前上下文</button>
+        </div>
+      </header>
+
+      <section id="messages" class="messages"></section>
+
+      <footer class="composer">
+        <textarea id="questionInput" placeholder="请输入你的问题..." rows="1"></textarea>
+        <button id="submitBtn" class="primary-btn">提交</button>
+      </footer>
+    </main>
+  </div>
+
+  <template id="userMessageTpl">
+    <div class="message-row user">
+      <div class="avatar">问</div>
+      <div class="bubble"></div>
+    </div>
+  </template>
+
+  <template id="assistantMessageTpl">
+    <div class="message-row assistant">
+      <div class="avatar">答</div>
+      <div class="bubble">
+        <div class="answer"></div>
+        <div class="references"></div>
+        <div class="images"></div>
+        <div class="debug"></div>
+      </div>
+    </div>
+  </template>
+
+  <script src="/static/chat.js"></script>
+</body>
+</html>

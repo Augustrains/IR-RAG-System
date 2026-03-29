@@ -1,0 +1,34 @@
+# Fine-tune local bge-reranker-v2-m3 with IR-RAG grouped labels.
+model_name_or_path: "/root/autodl-tmp/IR-RAG-System/models/bge-reranker-v2-m3"
+model_type: "bert_encoder"
+num_labels: 1
+query_format: "{}"
+document_format: "{}"
+
+train_dataset: "/root/autodl-tmp/IR-RAG-System/data/qa_pairs/rag_retrieval_reranker/train_grouped.jsonl"
+train_dataset_type: "grouped"
+train_label_key: "label"
+train_group_size: 10
+shuffle_rate: 0.0
+max_len: 512
+
+val_dataset: "/root/autodl-tmp/IR-RAG-System/data/qa_pairs/rag_retrieval_reranker/val_grouped.jsonl"
+val_dataset_type: "grouped"
+val_label_key: "label"
+loss_type: "pairwise_ranknet"
+
+output_dir: "/root/autodl-tmp/IR-RAG-System/output/rag_retrieval_bge_reranker_v2_m3"
+save_on_epoch_end: 1
+num_max_checkpoints: 3
+
+epochs: 2
+lr: 2e-5
+batch_size: 2
+seed: 42
+warmup_proportion: 0.1
+stable_proportion: 0.0
+gradient_accumulation_steps: 8
+mixed_precision: fp16
+
+log_interval: 10
+log_with: "tensorboard"

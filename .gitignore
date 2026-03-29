@@ -1,0 +1,87 @@
+# Local secrets and machine-specific config
+config.ini
+.env
+.env.*
+*.local
+*.secret
+*.key
+*.pem
+*.token
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# Python cache / build artifacts
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.nox/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Project caches and package caches
+.cache/
+.pip_cache/
+.tmp_pip/
+hf_cache/
+
+# Logs and runtime files
+log/
+logs/
+*.log
+nohup.out
+*.pid
+*.lock
+
+# Training outputs / checkpoints
+output/
+runs/
+checkpoints/
+
+# Local model weights and downloaded artifacts
+models/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+
+# Databases / indexes / serialized intermediates
+*.db
+*.sqlite
+*.sqlite3
+*.pkl
+*.index
+faiss_index*
+milvus.db
+
+# Generated project data
+data/chat_sessions/
+data/evaluate_data/
+data/pdf/
+data/processed_docs/
+data/qa_pairs/
+data/saved_images/
+data/saved_index/
+
+# Evaluation outputs
+src/evaluation/report/
+src/evaluation/runs/
+
+# OS junk
+.DS_Store
+Thumbs.db
