@@ -54,6 +54,7 @@ checkpoints/
 
 # Local model weights and downloaded artifacts
 models/
+!models/download.sh
 *.safetensors
 *.bin
 *.pt
@@ -82,6 +83,18 @@ data/saved_index/
 src/evaluation/report/
 src/evaluation/runs/
 
+# Local release bundles
+release_artifacts/
+
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Tracked minimal inference artifacts
+!artifacts/
+!artifacts/lora_minimal/
+!artifacts/lora_minimal/adapter_model.safetensors
+!artifacts/lora_minimal/adapter_config.json
+!artifacts/lora_minimal/README.md
+!artifacts/lora_minimal/chat_template.jinja
+!artifacts/lora_minimal/MANIFEST.txt
