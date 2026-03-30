@@ -1,7 +1,7 @@
 """
 从精简版 RAG 输入 JSONL 读取 Alpaca 样本，调用 base / LoRA Qwen 问答模型并输出预测结果。
 
-输入数据来自 build_rag_eval_inputs.py 生成的 records.jsonl，每条至少包含：
+输入数据来自 /root/autodl-tmp/IR-RAG-System/src/evaluation/rag_eval_inputs/<run_id>/records.jsonl，每条至少包含：
 - sample_id
 - question
 - gold_answer
@@ -31,7 +31,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 BASE_EVAL_DIR = Path("/root/autodl-tmp/IR-RAG-System/src/evaluation")
 DEFAULT_RUNS_DIR = BASE_EVAL_DIR / "runs"
-DEFAULT_DATASET_PATH = str(DEFAULT_RUNS_DIR)
+DEFAULT_DATASET_PATH = "/root/autodl-tmp/IR-RAG-System/src/evaluation/rag_eval_inputs"
 DEFAULT_BASE_MODEL_PATH = "/root/autodl-tmp/IR-RAG-System/models/Qwen3-8B"
 DEFAULT_ADAPTER_PATH = "/root/autodl-tmp/IR-RAG-System/output/qwen3_8b_lora_ir_rag"
 DEFAULT_MAX_NEW_TOKENS = 256
@@ -81,7 +81,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", type=str, default="base", choices=["base", "lora"], help="评测基座或 LoRA")
     parser.add_argument("--base-model-path", type=str, default=DEFAULT_BASE_MODEL_PATH, help="基座模型路径")
     parser.add_argument("--adapter-path", type=str, default=DEFAULT_ADAPTER_PATH, help="LoRA adapter 路径")
-    parser.add_argument("--dataset-path", type=str, required=True, help="build_rag_eval_inputs.py 生成的精简版 records.jsonl")
+    parser.add_argument("--dataset-path", type=str, required=True, help="build_rag_eval_inputs.py 在 src/evaluation/rag_eval_inputs/<run_id>/ 下生成的精简版 records.jsonl")
     parser.add_argument("--runs-dir", type=str, default=str(DEFAULT_RUNS_DIR), help="评测运行目录根路径")
     parser.add_argument("--run-name", type=str, default="", help="可选，自定义运行名")
     parser.add_argument("--limit", type=int, default=0, help="仅评测前 N 条，0 表示全量")

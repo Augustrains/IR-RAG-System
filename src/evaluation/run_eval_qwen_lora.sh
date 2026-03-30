@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BASE_MODEL_PATH="${BASE_MODEL_PATH:-/root/autodl-tmp/IR-RAG-System/models/Qwen3-8B}"
-ADAPTER_PATH="${ADAPTER_PATH:-/root/autodl-tmp/IR-RAG-System/output/qwen3_8b_lora_ir_rag}"
+ADAPTER_PATH="${ADAPTER_PATH:-/root/autodl-tmp/IR-RAG-System/output/qwen3_8b_lora_ir_rag_round2_clean}"
 DATASET_PATH="${DATASET_PATH:-/root/autodl-tmp/IR-RAG-System/LlamaFactory-main/data/ir_rag/test_augmented_with_neg_alpaca.jsonl}"
 RUNS_DIR="${RUNS_DIR:-/root/autodl-tmp/IR-RAG-System/src/evaluation/runs}"
 RUN_NAME="${RUN_NAME:-lora_eval}"

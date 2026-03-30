@@ -84,6 +84,7 @@ def load_grouped_testset(path: str) -> List[Dict[str, Any]]:
     return rows
 
 
+#遍历问题，得到语料库和标签结构
 def build_corpus_and_labels(
     rows: Sequence[Dict[str, Any]],
 ) -> tuple[list[Document], dict[str, str], dict[str, dict[str, int]]]:

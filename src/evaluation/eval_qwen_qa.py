@@ -114,8 +114,15 @@ def save_jsonl(path: Path, rows: Iterable[Dict[str, Any]]) -> None:
             file.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def strip_reasoning_content(text: str) -> str:
+    raw = str(text or "")
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.I | re.S)
+    raw = re.sub(r"<thinking>.*?</thinking>", "", raw, flags=re.I | re.S)
+    return raw.strip()
+
+
 def normalize_text(text: str) -> str:
-    text = str(text or "").strip()
+    text = strip_reasoning_content(str(text or "")).strip()
     text = text.replace("\u3000", " ")
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"\s+", " ", text)
@@ -315,12 +322,22 @@ class LocalQwenGenerator:
         messages.append({"role": "user", "content": build_prompt(sample)})
 
         if hasattr(self.tokenizer, "apply_chat_template"):
-            model_inputs = self.tokenizer.apply_chat_template(
-                messages,
-                tokenize=True,
-                add_generation_prompt=True,
-                return_tensors="pt",
-            )
+            apply_template_kwargs = {
+                "tokenize": True,
+                "add_generation_prompt": True,
+                "return_tensors": "pt",
+            }
+            try:
+                model_inputs = self.tokenizer.apply_chat_template(
+                    messages,
+                    enable_thinking=False,
+                    **apply_template_kwargs,
+                )
+            except TypeError:
+                model_inputs = self.tokenizer.apply_chat_template(
+                    messages,
+                    **apply_template_kwargs,
+                )
         else:
             prompt = ""
             if sample.system_prompt:
@@ -346,7 +363,8 @@ class LocalQwenGenerator:
 
         generated = self.model.generate(**generation_kwargs)
         generated_tokens = generated[0][model_inputs.shape[-1] :]
-        return self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+        decoded = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+        return strip_reasoning_content(decoded)
 
 
 def evaluate_predictions(records: Sequence[PredictionRecord]) -> Dict[str, Any]:

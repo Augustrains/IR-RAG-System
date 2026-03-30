@@ -39,7 +39,7 @@ BASE_EVAL_DIR = Path("/root/autodl-tmp/IR-RAG-System/src/evaluation")
 DEFAULT_DATASET_PATH = (
     "/root/autodl-tmp/IR-RAG-System/LlamaFactory-main/data/ir_rag/test_augmented_with_neg_alpaca.jsonl"
 )
-DEFAULT_OUTPUT_DIR = BASE_EVAL_DIR / "runs"
+DEFAULT_OUTPUT_DIR = BASE_EVAL_DIR / "rag_eval_inputs"
 DEFAULT_RETRIEVAL_TOPK = 3
 DEFAULT_RERANK_TOPK = 5
 

@@ -1,0 +1,18 @@
+{
+  "run_id": "20260329_230539_case3_new_retriever_base_qa_test_augmented_with_neg_alpaca",
+  "generated_at": "2026-03-29T23:09:00",
+  "dataset_path": "/root/autodl-tmp/IR-RAG-System/LlamaFactory-main/data/ir_rag/test_augmented_with_neg_alpaca.jsonl",
+  "limit": 0,
+  "retriever_enabled": true,
+  "retrievers": [
+    "bm25",
+    "milvus"
+  ],
+  "retrieval_topk": 3,
+  "reranker_enabled": false,
+  "reranker": "",
+  "rerank_topk": 0,
+  "bge_reranker_model_path": "/root/autodl-tmp/IR-RAG-System/models/bge-reranker-v2-m3",
+  "qwen_reranker_model_path": "/root/autodl-tmp/IR-RAG-System/models/Qwen3-Reranker-4B",
+  "prompt_template": "### 检索信息\n{context}\n\n### 任务\n你是《Introduction to Information Retrieval》教材的问答助手。你必须综合考虑每条检索结果中的正文、页码、图表信息、脚注信息，再回答用户问题。\n\n### 回答要求\n1. 只能依据给定的检索信息作答，不允许编造。\n2. 如果检索信息不足以支持回答，直接输出“无答案”。\n3. 如果答案依赖图表或脚注，在最终答案中自然说明，并给出对应引用编号。\n4. 不要输出思考过程、分析过程、解释过程。\n5. 不要输出 <think>、</think> 或任何额外标签。\n6. 必须严格按照以下格式输出，且只能输出这一段：\n<answer>\n这里写最终回答\n</answer>\n\n### 用户问题\n{query}"
+}

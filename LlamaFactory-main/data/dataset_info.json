@@ -2,7 +2,7 @@
   "identity": {
     "file_name": "identity.json"
   },
-    "ir_rag_train": {
+  "ir_rag_train": {
     "file_name": "ir_rag/train_augmented_with_neg_alpaca.jsonl",
     "columns": {
       "prompt": "instruction",
@@ -763,5 +763,23 @@
       "prompt": "content"
     },
     "folder": "python"
+  },
+  "ir_rag_train_round2_clean_aug": {
+    "file_name": "ir_rag/train_round2_clean_augmented_alpaca.jsonl",
+    "columns": {
+      "prompt": "instruction",
+      "query": "input",
+      "response": "output",
+      "system": "system"
+    }
+  },
+  "ir_rag_train_round2_clean_merged": {
+    "file_name": "ir_rag/train_augmented_with_neg_round2_clean_alpaca.jsonl",
+    "columns": {
+      "prompt": "instruction",
+      "query": "input",
+      "response": "output",
+      "system": "system"
+    }
   }
 }

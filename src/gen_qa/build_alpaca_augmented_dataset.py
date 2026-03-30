@@ -61,7 +61,7 @@ def contains_chinese(text: str) -> bool:
 def safe_lower(text: str) -> str:
     return (text or "").strip().lower()
 
-
+#清洗出来关键字
 def dedup_keywords(keywords: Any, max_keywords: int = 5) -> List[str]:
     if not isinstance(keywords, list):
         return []
@@ -127,30 +127,7 @@ def save_jsonl(path: str, rows: List[Dict[str, Any]]):
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-
-# =========================
-# Step 1: Question Type Classification
-# =========================
-
-
-
-
-# =========================
-# 2. 基础工具
-# =========================
-
-def normalize_text(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "")).strip()
-
-
-def safe_lower(text: str) -> str:
-    return normalize_text(text).lower()
-
-
-def contains_chinese(text: str) -> bool:
-    return bool(re.search(r"[\u4e00-\u9fff]", text or ""))
-
-
+#向量单位化
 def l2_normalize(vecs: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(vecs, axis=1, keepdims=True)
     norms = np.where(norms == 0, 1.0, norms)
@@ -167,7 +144,7 @@ def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
 
 def bgem3_encode(texts: List[str]) -> np.ndarray:
     """
-    直接调用你现有的 BGEM3EmbeddingFunction
+    直接调用现有的 BGEM3EmbeddingFunction
     返回 dense 向量并做 L2 normalize
     """
     emb = embedding_handler(texts)
@@ -175,11 +152,7 @@ def bgem3_encode(texts: List[str]) -> np.ndarray:
     dense = l2_normalize(dense)
     return dense
 
-
-# =========================
-# 3. 规则分类
-# =========================
-
+#给问句分类
 def classify_question_type_rule(question: str) -> str:
     """
     返回：
@@ -255,9 +228,6 @@ def classify_question_type_rule(question: str) -> str:
     return "other"
 
 
-# =========================
-# 4. 原型库
-# =========================
 
 QUESTION_TYPE_PROTOTYPES: Dict[str, List[str]] = {
     "definition": [
@@ -309,10 +279,6 @@ QUESTION_TYPE_PROTOTYPES: Dict[str, List[str]] = {
 }
 
 
-# =========================
-# 5. BGEM3 原型分类器
-# =========================
-
 class QuestionTypeEmbedClassifier:
     """
     只在规则失败时，对 question_type 做 prototype 语义匹配
@@ -320,14 +286,15 @@ class QuestionTypeEmbedClassifier:
     def __init__(
         self,
         prototypes: Optional[Dict[str, List[str]]] = None,
-        threshold: float = 0.50,
+        threshold: float = 0.50, #相似度阈值
     ):
         self.prototypes = prototypes or QUESTION_TYPE_PROTOTYPES
         self.threshold = threshold
 
         self.prototype_centroids: Dict[str, np.ndarray] = {}
         self._build_prototype_centroids()
-
+    
+    #构建每种类型的向量中心（centroid），用于后续的相似度计算
     def _build_prototype_centroids(self):
         for qtype, texts in self.prototypes.items():
             vecs = bgem3_encode(texts)
@@ -340,7 +307,8 @@ class QuestionTypeEmbedClassifier:
                 centroid = centroid / norm
 
             self.prototype_centroids[qtype] = centroid
-
+   
+   #计算问题与每个类型中心的余弦相似度，返回得分最高的类型和对应的相似度分数
     def predict_with_score(self, question: str) -> Tuple[str, float]:
         q_vec = bgem3_encode([question])[0]
 
@@ -362,13 +330,9 @@ class QuestionTypeEmbedClassifier:
         return self.predict_with_score(question)[0]
 
 
-# =========================
-# 6. 最终分类入口
-# =========================
-
 _embed_classifier = None
 
-
+#创建一个分类器
 def get_embed_classifier() -> QuestionTypeEmbedClassifier:
     global _embed_classifier
     if _embed_classifier is None:
@@ -398,11 +362,7 @@ def classify_question_type(
 
     return "other"
 
-
-# =========================
-# Step 2: Augmentation Builders
-# =========================
-
+#构建单纯QA问题
 def build_original_sample(item: Dict[str, Any], question_type: str) -> Dict[str, Any]:
     q = item["question"]
     a = item["answer"]
@@ -423,7 +383,7 @@ def build_original_sample(item: Dict[str, Any], question_type: str) -> Dict[str,
         "system": SYSTEM_PROMPT,
     }
 
-
+#构建含关键词的问题
 def build_question_keywords_sample(item: Dict[str, Any], question_type: str) -> Dict[str, Any]:
     q = item["question"]
     a = item["answer"]
@@ -449,10 +409,10 @@ def build_question_keywords_sample(item: Dict[str, Any], question_type: str) -> 
         "system": SYSTEM_PROMPT,
     }
 
-
+#构建含解释类的问题
 def build_term_explanation_sample(item: Dict[str, Any], question_type: str) -> Optional[Dict[str, Any]]:
     """
-    只对 definition 做。
+    只对 definition 做，因为这有本类的任务，才能顺利提取出一个可以解释的术语
     从 question 或 keywords 中抽一个最核心术语。
     """
     if question_type != "definition":
@@ -510,19 +470,18 @@ def build_term_explanation_sample(item: Dict[str, Any], question_type: str) -> O
         "system": SYSTEM_PROMPT,
     }
 
-
+#构建错误问题，即对于一个原本的QA，构建一个Q变成否定版本的QA，让模型学会判断对错
 def make_wrong_statement(item: Dict[str, Any], question_type: str) -> str:
     """
-    保守构造伪错误陈述。
+    根据 QA，自动生成一个“看起来合理但其实是错的句子”
     只给 definition / representation 用。
+    因为只有定义和表示类任务，因为这两类任务十分容易构建反转的样本
     """
     q = item["question"]
     kws = item["keywords"]
     zh = contains_chinese(q)
 
     kw1 = kws[0] if len(kws) >= 1 else ""
-    kw2 = kws[1] if len(kws) >= 2 else ""
-    kw3 = kws[2] if len(kws) >= 3 else ""
 
     if question_type not in {"definition", "representation"}:
         return ""
@@ -535,9 +494,6 @@ def make_wrong_statement(item: Dict[str, Any], question_type: str) -> str:
                 subj = normalize_text(m.group(1))
                 if subj:
                     return f"{subj}不是信息检索中的具体概念，只是普通表达。"
-
-            if kw1 and kw2:
-                return f"{kw1}与{kw2}没有关系。"
             if kw1:
                 return f"{kw1}在信息检索中没有明确含义。"
             return ""
@@ -562,9 +518,6 @@ def make_wrong_statement(item: Dict[str, Any], question_type: str) -> str:
                 subj = normalize_text(subj)
                 if subj:
                     return f"{subj} are not used in information retrieval systems."
-
-            if kw1 and kw2:
-                return f"{kw1} is exactly the same as {kw2} in all retrieval settings."
             if kw1:
                 return f"{kw1} has no specific meaning in information retrieval."
             return ""
@@ -577,14 +530,14 @@ def make_wrong_statement(item: Dict[str, Any], question_type: str) -> str:
 
     return ""
 
-
+#构建判断纠错类的问题
 def build_error_correction_sample(item: Dict[str, Any], question_type: str) -> Optional[Dict[str, Any]]:
     """
     只对 definition / representation 做。
     """
     if question_type not in {"definition", "representation"}:
         return None
-
+    
     wrong_stmt = make_wrong_statement(item, question_type)
     if not wrong_stmt:
         return None
@@ -612,11 +565,7 @@ def build_error_correction_sample(item: Dict[str, Any], question_type: str) -> O
         "system": SYSTEM_PROMPT,
     }
 
-
-# =========================
-# Step 3: Augmentation Pipeline
-# =========================
-
+#对一个原始 QA 样本，构建多个增强样本
 def augment_one_item(item: Dict[str, Any]) -> List[Dict[str, Any]]:
     out = []
 
@@ -657,10 +606,7 @@ def build_master_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return master_rows
 
 
-# =========================
-# Step 4: Export Alpaca
-# =========================
-
+#转换成训练所需要的格式
 def to_alpaca_row(master_item: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "instruction": master_item["instruction"],
@@ -673,11 +619,7 @@ def to_alpaca_row(master_item: Dict[str, Any]) -> Dict[str, Any]:
 def build_alpaca_rows(master_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [to_alpaca_row(x) for x in master_rows]
 
-
-# =========================
-# Stats
-# =========================
-
+#统计结果
 def print_stats(rows: List[Dict[str, Any]], master_rows: List[Dict[str, Any]]):
     print("原始样本数：", len(rows))
     print("增强后主表样本数：", len(master_rows))
@@ -703,10 +645,6 @@ def print_stats(rows: List[Dict[str, Any]], master_rows: List[Dict[str, Any]]):
     for k, v in sorted(task_counter.items(), key=lambda x: (-x[1], x[0])):
         print(f"  {k}: {v}")
 
-
-# =========================
-# Main
-# =========================
 
 def main():
     rows = load_jsonl(INPUT_PATH)
