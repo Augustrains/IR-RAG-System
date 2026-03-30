@@ -249,6 +249,132 @@ python3 ir_rag_chat_frontend/app.py
 - 使用 `eval_qwen_from_rag_inputs.py` 跑 base 或 LoRA 问答模型
 - 使用 `eval_retriever.py` 与 `eval_rank.py` 做模块级评测
 
+
+## 训练数据生成
+
+当前仓库中，训练生成模型和训练 reranker 的数据构建脚本都已经存在，但 README 之前没有把这部分流程单独展开。若你希望复现实验或继续迭代模型，通常需要按下面两条链路分别准备数据。
+
+### 1. 生成问答模型训练数据
+
+这一部分对应 [`src/gen_qa`](./src/gen_qa) 和 [`LlamaFactory-main/examples/train_lora/qwen3_ir_rag_lora_sft.yaml`](./LlamaFactory-main/examples/train_lora/qwen3_ir_rag_lora_sft.yaml)。
+
+推荐顺序如下：
+
+1. 先对切分后的文档块做 QA 可用性过滤  
+   输入通常是文档切分结果，脚本会把样本分为 `core / extra / drop`，并输出到：
+   - `data/processed_docs/qa_filter_outputs/core_docs.jsonl`
+   - `data/processed_docs/qa_filter_outputs/extra_docs.jsonl`
+
+```bash
+python3 src/gen_qa/filter.py
+```
+
+2. 基于过滤结果生成初始 QA 对  
+   `core` 文档默认生成 4 个 QA，`extra` 文档默认生成 1 个 QA，输出：
+   - `data/qa_pairs/qa_pair.jsonl`
+
+```bash
+python3 src/gen_qa/generate_qa.py
+```
+
+3. 对 QA 做质量打分  
+   该步骤会对 `qa_pair.jsonl` 中的问答逐条评分，输出：
+   - `data/qa_pairs/qa_score.jsonl`
+
+```bash
+python3 src/gen_qa/score.py
+```
+
+4. 对高分问题做泛化并切分训练/测试集  
+   默认仅对 `score >= 4` 的问题做泛化，最终导出：
+   - `data/qa_pairs/train_qa_pair.json`
+   - `data/qa_pairs/test_qa_pair.json`
+
+```bash
+python3 src/gen_qa/question_generalizer.py
+```
+
+5. 构造成 LLaMA-Factory 可直接训练的 Alpaca 格式  
+   [`src/gen_qa/build_alpaca_augmented_dataset.py`](./src/gen_qa/build_alpaca_augmented_dataset.py) 默认读取 `test_qa_keywords.jsonl`，脚本里已经预留了 train/test 两套路径，通常需要根据当前要生成的是训练集还是测试集切换输入输出路径。产物包括：
+   - `data/qa_pairs/train_augmented_master.jsonl` 或 `test_augmented_master.jsonl`
+   - `data/qa_pairs/train_augmented_alpaca.jsonl` 或 `test_augmented_alpaca.jsonl`
+
+```bash
+python3 src/gen_qa/build_alpaca_augmented_dataset.py
+```
+
+6. 可选：混入拒答负样本  
+   [`src/gen_qa/augment_with_negative_samples.py`](./src/gen_qa/augment_with_negative_samples.py) 会把通用闲聊或越域问题整理成 `output="无答案"` 的样本，并并入最终训练/测试集，输出：
+   - `data/qa_pairs/train_augmented_with_neg_alpaca.jsonl`
+   - `data/qa_pairs/test_augmented_with_neg_alpaca.jsonl`
+
+```bash
+python3 src/gen_qa/augment_with_negative_samples.py
+```
+
+完成后，可将最终 Alpaca 数据挂到 `LlamaFactory-main/data/ir_rag/` 下，并结合现有配置启动 LoRA 训练。仓库中现成配置默认使用：
+
+- 训练集：`train_augmented_with_neg_alpaca.jsonl`
+- 测试集：`test_augmented_with_neg_alpaca.jsonl`
+- 配置文件：`LlamaFactory-main/examples/train_lora/qwen3_ir_rag_lora_sft.yaml`
+
+### 2. 生成 reranker 训练数据
+
+这一部分对应 [`src/gen_qa/generate_rank.py`](./src/gen_qa/generate_rank.py)、[`scripts/prepare_rag_retrieval_reranker_data.py`](./scripts/prepare_rag_retrieval_reranker_data.py) 和 [`scripts/train_rag_retrieval_bge_reranker_v2_m3.sh`](./scripts/train_rag_retrieval_bge_reranker_v2_m3.sh)。
+
+推荐顺序如下：
+
+1. 基于 QA 数据构造排序标签原始集  
+   [`src/gen_qa/generate_rank.py`](./src/gen_qa/generate_rank.py) 会读取：
+   - `data/qa_pairs/train_qa_pair.json`
+   - `data/qa_pairs/test_qa_pair.json`
+   - `data/qa_pairs/qa_generalized.jsonl`
+   - `data/qa_pairs/train_augmented_master.jsonl`
+   - `data/qa_pairs/test_augmented_master.jsonl`
+
+   然后调用 BM25 + Milvus 召回候选文档，再由 LLM 给候选打 `1 / 0 / -1` 相关性标签，最终输出：
+   - `data/qa_pairs/reranker/train_rank_labels.jsonl`
+   - `data/qa_pairs/reranker/val_rank_labels.jsonl`
+   - `data/qa_pairs/reranker/test_rank_labels.jsonl`
+
+```bash
+python3 src/gen_qa/generate_rank.py
+```
+
+2. 转换成 RAG-Retrieval 训练格式  
+   训练脚本默认使用 grouped 格式数据。执行：
+
+```bash
+python3 scripts/prepare_rag_retrieval_reranker_data.py --write-pointwise
+```
+
+默认会把 `-1/0/1` 标签映射为 `0/1/2`，并导出到：
+
+- `data/qa_pairs/rag_retrieval_reranker/train_grouped.jsonl`
+- `data/qa_pairs/rag_retrieval_reranker/val_grouped.jsonl`
+- `data/qa_pairs/rag_retrieval_reranker/test_grouped.jsonl`
+- `data/qa_pairs/rag_retrieval_reranker/train_pointwise.jsonl`
+- `data/qa_pairs/rag_retrieval_reranker/val_pointwise.jsonl`
+- `data/qa_pairs/rag_retrieval_reranker/test_pointwise.jsonl`
+
+3. 启动 reranker 训练  
+   现成配置文件 [`scripts/configs/rag_retrieval_bge_reranker_v2_m3.yaml`](./scripts/configs/rag_retrieval_bge_reranker_v2_m3.yaml) 默认读取上一步导出的 `train_grouped.jsonl` 与 `val_grouped.jsonl`：
+
+```bash
+bash scripts/train_rag_retrieval_bge_reranker_v2_m3.sh
+```
+
+训练输出默认写入：
+
+- `output/rag_retrieval_bge_reranker_v2_m3`
+
+### 3. 两条数据链路的关系
+
+- 生成模型训练数据的核心目标是让 Qwen 学会基于教材知识块稳定回答问题，以及在越域问题上输出“无答案”。
+- reranker 训练数据的核心目标是让排序模型学会区分“强相关证据块”和“仅部分相关块”。
+- 两者都基于同一批教材切分块衍生，但训练目标不同，因此数据构造方式也不同。
+- 如果你只想跑在线问答，不需要先走完整训练流程；如果你要复现实验结果，建议把这两条数据链路都补齐。
+
 ## 项目目录
 
 ```text
@@ -407,4 +533,3 @@ IR-RAG-System/
 - PDF 原始文件与生成数据
 - 本地索引与数据库文件
 - 缓存、日志与 API Key 配置
-
