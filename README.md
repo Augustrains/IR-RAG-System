@@ -318,10 +318,9 @@ IR-RAG-System/
 
 当前仓库中已经有 base 与 LoRA 版本在同一测试集 `test_augmented_with_neg_alpaca.jsonl` 上的离线评测结果，样本数为 393，其中可回答样本 351 条、拒答样本 42 条。核心指标如下：
 
-| 模型 | Token F1 | ROUGE-L | false_no_answer_count | 可回答样本平均 Token F1 | 拒答样本平均 Token F1 | missed_no_answer_count |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| 基础模型 `Qwen3-8B` | 0.1064 | 0.0832 | 30 | 0.1173 | 0.0149 | 42 |
-| 微调后 `Qwen3-8B + LoRA` | 0.4265 | 0.3690 | 4 | 0.3750 | 0.8573 | 6 |
+模型	Token F1	ROUGE-L	false_no_answer_count	missed_no_answer_count
+基础模型 Qwen3-8B	0.1064	0.0832	30	42
+微调后 Qwen3-8B + LoRA	0.4265	0.3690	4	6
 
 从对比结果看，LoRA 微调带来了非常明显的生成质量提升：
 
