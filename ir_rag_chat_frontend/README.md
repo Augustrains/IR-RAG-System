@@ -43,16 +43,6 @@ http://127.0.0.1:7860
 
 ## 说明
 
-1. `app.py` 中保留了你原先的核心流程：
-   - BM25 召回
-   - Milvus 召回
-   - `merge_docs`
-   - `bge_m3_reranker.rank`
-   - `request_chat`
-   - `post_processing`
+1. 图片展示走 `/api/images?path=...`，后端根据本地路径读取图片并返回。
 
-2. 前端只是把原来的 `while True + input()` 改成了 HTTP 接口调用，不改变问答主链路。
-
-3. 图片展示走 `/api/images?path=...`，后端根据本地路径读取图片并返回。
-
-4. 聊天记录每个窗口一个 JSON 文件，便于后续继续扩展“重命名聊天”“删除聊天”等功能。
+2. 聊天记录每个窗口一个 JSON 文件，便于后续继续扩展“重命名聊天”“删除聊天”等功能。
