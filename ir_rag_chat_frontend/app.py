@@ -72,44 +72,13 @@ class RAGPipeline:
 
     @staticmethod
     def build_doc_context(idx, doc):
-        metadata = doc.metadata or {}
-        page_no = metadata.get("orig_page_no") or metadata.get("page_no") or metadata.get("page") or "未知"
-        chunk_level = metadata.get("chunk_level") or "unknown"
-        source = metadata.get("source") or ""
-        figure_refs = metadata.get("figure_refs") or metadata.get("images_info") or []
-        footnotes = metadata.get("related_footnotes") or []
-
-        lines = [
-            f"【{idx}】",
-            f"页码: {page_no}",
-            f"分块层级: {chunk_level}",
-        ]
-        if source:
-            lines.append(f"来源: {source}")
-
-        lines.append("正文:")
-        lines.append(doc.page_content)
-
-        if figure_refs:
-            lines.append("图表信息:")
-            for figure in figure_refs:
-                if not isinstance(figure, dict):
-                    continue
-                fig_page = figure.get("orig_page_no") or figure.get("page_no") or page_no
-                fig_label = figure.get("caption_label") or ""
-                fig_text = figure.get("caption_text") or figure.get("title") or ""
-                fig_path = figure.get("image_path") or figure.get("path") or figure.get("img_path") or ""
-                lines.append(f"- 页码: {fig_page}; 标识: {fig_label}; 描述: {fig_text}; 路径: {fig_path}")
-
-        if footnotes:
-            lines.append("脚注信息:")
-            for footnote in footnotes:
-                lines.append(f"- {footnote}")
-
-        return "\n".join(lines)
+        return str(doc.page_content or "").strip()
 
     def build_context(self, docs):
-        return "\n\n".join(self.build_doc_context(idx + 1, doc) for idx, doc in enumerate(docs))
+        return "\n\n".join(
+            part for idx, doc in enumerate(docs)
+            if (part := self.build_doc_context(idx + 1, doc))
+        )
 
     def ask(self, query: str) -> dict:
         self._ensure_ready()
