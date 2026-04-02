@@ -40,7 +40,7 @@ BASE_EVAL_DIR = Path("/root/autodl-tmp/IR-RAG-System/src/evaluation")
 DEFAULT_DATA_PATH = "/root/autodl-tmp/IR-RAG-System/data/qa_pairs/rag_retrieval_reranker/test_grouped.jsonl"
 DEFAULT_RUNS_DIR = BASE_EVAL_DIR / "runs"
 DEFAULT_TOPK = 5
-TARGET_LABEL = 2
+TARGET_LABEL = 1
 RETRIEVER_CHOICES = ("bm25", "old_bm25", "milvus", "old_milvus")
 
 
