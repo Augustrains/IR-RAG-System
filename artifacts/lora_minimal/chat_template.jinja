@@ -1,9 +1,0 @@
-{% set system_message = 'Below is an instruction that describes a task. Write a response that appropriately completes the request.
-
-' %}{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}{% set system_message = messages[0]['content'] %}{% else %}{% set loop_messages = messages %}{% endif %}{% if system_message is defined %}{{ system_message }}{% endif %}{% for message in loop_messages %}{% set content = message['content'] %}{% if message['role'] == 'user' %}{{ '### Instruction:
-' + content + '
-
-### Response:
-' }}{% elif message['role'] == 'assistant' %}{{ content + '<|im_end|>' + '
-
-' }}{% endif %}{% endfor %}
