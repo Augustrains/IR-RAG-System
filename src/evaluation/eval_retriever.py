@@ -203,7 +203,7 @@ def evaluate_retriever_on_grouped_testset(
         query = str(row.get("query", "")).strip()
         label_map = qrels[query_id]
 
-        target_doc_ids = [doc_id for doc_id, label in label_map.items() if label == TARGET_LABEL]
+        target_doc_ids = [doc_id for doc_id, label in label_map.items() if label >= TARGET_LABEL]
         retrieved_docs = retriever.retrieve_topk(query, topk=topk)
 
         retrieved_doc_ids = []
