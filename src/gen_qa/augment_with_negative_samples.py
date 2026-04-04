@@ -24,7 +24,7 @@ NEG_TEST_ALPACA_PATH = "/root/autodl-tmp/IR-RAG-System/data/qa_pairs/negative_te
 FINAL_TRAIN_ALPACA_PATH = "/root/autodl-tmp/IR-RAG-System/data/qa_pairs/train_augmented_with_neg_alpaca.jsonl"
 FINAL_TEST_ALPACA_PATH = "/root/autodl-tmp/IR-RAG-System/data/qa_pairs/test_augmented_with_neg_alpaca.jsonl"
 
-SYSTEM_PROMPT = "你是信息检索与车机知识问答助手。"
+SYSTEM_PROMPT = "你是信息检索领域的专业助手。"
 NEGATIVE_INSTRUCTION = "请判断用户问题是否属于当前知识范围。如果问题与当前知识范围无关，或无法根据当前知识回答，请输出“无答案”。"
 
 
