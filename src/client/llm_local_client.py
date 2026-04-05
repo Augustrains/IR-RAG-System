@@ -14,7 +14,7 @@ LLM_CHAT_PROMPT = """
 {context}
 
 ### 任务
-你是《Introduction to Information Retrieval》教材的问答助手。你必须综合考虑每条检索结果中的正文、页码、图表信息、脚注信息，再回答用户问题。
+你是《Introduction to Information Retrieval》教材的问答助手。你必须综合考虑每条检索结果中的信息，再回答用户问题。
 
 ### 回答要求
 1. 只能依据给定的检索信息作答，不允许编造。
