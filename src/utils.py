@@ -179,7 +179,8 @@ def save_2_mongo(split_docs):
 
 def sync_source_documents(split_docs: list[Document], source: str) -> tuple[list[Document], list[str]]:
     """
-    对于同一个source来源的内容,去除旧的内容，更新Mongo，同时返回新增的和去掉的内容
+    对于同一个 source 的内容，采用“先删后重建”的方式同步 MongoDB。
+    返回本次写入的文档和被删除的旧 unique_id，保持与旧接口兼容。
     """
     dedup_docs = {}
     for doc in split_docs:
@@ -194,21 +195,16 @@ def sync_source_documents(split_docs: list[Document], source: str) -> tuple[list
             {"unique_id": 1, "_id": 0}
         )
     }
-   
 
-    new_ids = set(dedup_docs.keys())
-    stale_ids = sorted(existing_ids - new_ids)
+    stale_ids = sorted(existing_ids)
 
-    save_2_mongo(list(dedup_docs.values()))
+    if existing_ids:
+        manual_text_collection.delete_many({"metadata.source": source})
 
-    if stale_ids:
-        manual_text_collection.delete_many({"unique_id": {"$in": stale_ids}})
+    rebuilt_docs = list(dedup_docs.values())
+    save_2_mongo(rebuilt_docs)
 
-    added_docs = [
-        doc for unique_id, doc in dedup_docs.items()
-        if unique_id not in existing_ids
-    ]
-    return added_docs, stale_ids
+    return rebuilt_docs, stale_ids
 
 
 
