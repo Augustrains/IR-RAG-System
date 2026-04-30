@@ -242,6 +242,7 @@ class MilvusRetriever:
             expr = f'source == "{safe_source}"'
 
             # 同一个 source 重新入库前先删除旧数据
+            #后续会增加对于待更新文档大小判断，小文档依旧重建，大文档可以选择chunk 级 diff 更新。
             col.delete(expr)
             col.flush()
 
