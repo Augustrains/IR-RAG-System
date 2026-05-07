@@ -33,7 +33,6 @@ EN_COL_NAME = "hybrid_bge_m3_en"
 
 mongo_collection = MongoConfig.get_collection("manual_text")
 connections.connect(uri=milvus_db_path)
-
 embedding_handler = BGEM3EmbeddingFunction(
     model_name=bge_m3_model_path,
     device="cuda"
@@ -43,15 +42,11 @@ embedding_handler = BGEM3EmbeddingFunction(
 class MilvusRetriever:
     """
     双语 Milvus 检索器：
-
     1. 文档按中英文分别建 collection
     2. 查询时双路检索：
        - 原语言直查
        - 翻译后跨语言补查
-    3. sparse_vector 使用 SPARSE_INVERTED_INDEX 倒排索引
-    4. dense_vector 使用 HNSW 图索引
-    5. sparse + dense 结果通过 RRF 融合
-    6. 检索结果从 MongoDB 回查 parent 文档
+    3. 合并、去重、映射 parent
     """
 
     def __init__(self, docs: Optional[Sequence[Document]] = None, rebuild: bool = False):
@@ -90,54 +85,26 @@ class MilvusRetriever:
                 max_length=1024,
             ),
         ]
-
         schema = CollectionSchema(
             fields,
             description=f"Hybrid search collection for {col_name}",
         )
 
-        # sparse_vector：稀疏向量倒排索引
-        sparse_index = {
-            "index_type": "SPARSE_INVERTED_INDEX",
-            "metric_type": "IP",
-        }
-
-        # dense_vector：HNSW 图索引
-        # M：每个节点最多连接的邻居数量，越大召回通常越好，但内存更高
-        # efConstruction：建图时的候选搜索范围，越大索引质量越好，但建索引更慢
-        dense_index = {
-            "index_type": "HNSW",
-            "metric_type": "IP",
-            "params": {
-                "M": 16,
-                "efConstruction": 200,
-            },
-        }
+        sparse_index = {"index_type": "SPARSE_INVERTED_INDEX", "metric_type": "IP"}
+        dense_index = {"index_type": "AUTOINDEX", "metric_type": "IP"}
 
         if rebuild:
             if utility.has_collection(col_name):
                 utility.drop_collection(col_name)
 
-            col = Collection(
-                col_name,
-                schema=schema,
-                consistency_level="Strong",
-            )
+            col = Collection(col_name, schema=schema, consistency_level="Strong")
             col.create_index("sparse_vector", sparse_index)
             col.create_index("dense_vector", dense_index)
-
         else:
             if utility.has_collection(col_name):
-                col = Collection(
-                    col_name,
-                    consistency_level="Strong",
-                )
+                col = Collection(col_name, consistency_level="Strong")
             else:
-                col = Collection(
-                    col_name,
-                    schema=schema,
-                    consistency_level="Strong",
-                )
+                col = Collection(col_name, schema=schema, consistency_level="Strong")
                 col.create_index("sparse_vector", sparse_index)
                 col.create_index("dense_vector", dense_index)
 
@@ -193,7 +160,6 @@ class MilvusRetriever:
 
         zh_docs = []
         en_docs = []
-
         for doc in dedup_docs.values():
             lang = (doc.metadata or {}).get("lang", "en")
             if lang == "zh":
@@ -201,23 +167,14 @@ class MilvusRetriever:
             else:
                 en_docs.append(doc)
 
-        inserted_zh = self._update_one_language_collection(
-            self.zh_col,
-            zh_docs,
-            lang="zh",
-        )
-        inserted_en = self._update_one_language_collection(
-            self.en_col,
-            en_docs,
-            lang="en",
-        )
+        inserted_zh = self._update_one_language_collection(self.zh_col, zh_docs, lang="zh")
+        inserted_en = self._update_one_language_collection(self.en_col, en_docs, lang="en")
 
         print(
             f"向量库更新完成：共处理 {len(dedup_docs)} 条有效文档，"
             f"跳过 {skipped} 条无效文档，"
             f"中文插入 {inserted_zh} 条，英文插入 {inserted_en} 条，"
-            f"中文集合总数 {self.zh_col.num_entities}，"
-            f"英文集合总数 {self.en_col.num_entities}"
+            f"中文集合总数 {self.zh_col.num_entities}，英文集合总数 {self.en_col.num_entities}"
         )
 
     def _update_one_language_collection(
@@ -230,7 +187,6 @@ class MilvusRetriever:
             return 0
 
         docs_by_source = defaultdict(list)
-
         for doc in docs:
             source = doc.metadata["source"]
             docs_by_source[source].append(doc)
@@ -240,9 +196,6 @@ class MilvusRetriever:
         for source, source_docs in docs_by_source.items():
             safe_source = source.replace("\\", "\\\\").replace('"', '\\"')
             expr = f'source == "{safe_source}"'
-
-            # 同一个 source 重新入库前先删除旧数据
-            #后续会增加对于待更新文档大小判断，小文档依旧重建，大文档可以选择chunk 级 diff 更新。
             col.delete(expr)
             col.flush()
 
@@ -262,263 +215,93 @@ class MilvusRetriever:
                 col.insert(batch_entities)
 
             total_inserted += len(source_docs)
-            print(
-                f"[Milvus-{lang}] source={source} 更新完成，"
-                f"当前插入 {len(source_docs)} 条"
-            )
+            print(f"[Milvus-{lang}] source={source} 更新完成，当前插入 {len(source_docs)} 条")
 
         col.flush()
         return total_inserted
 
-     def _search_dense_sparse_one_collection(
+    # =========================
+    # 单路 hybrid search
+    # =========================
+    def _hybrid_search_one_collection(
         self,
         col: Collection,
         query: str,
         limit: int = 10,
     ):
-        """
-        对单个 collection 分别执行 dense 检索和 sparse 检索。
-        返回：
-            dense_hits: [{"uid": ..., "score": ..., "route": ...}, ...]
-            sparse_hits: [{"uid": ..., "score": ..., "route": ...}, ...]
-        """
         if not query.strip():
-            return [], []
+            return [[]]
 
         query_embedding = embedding_handler.encode_queries([query])
-
         query_dense_embedding = query_embedding["dense"][0]
         query_sparse_embedding = query_embedding["sparse"][[0]]
 
-        dense_search_params = {
-            "metric_type": "IP",
-            "params": {
-                "ef": max(64, limit),
-            },
-        }
+        dense_search_params = {"metric_type": "IP", "params": {}}
+        dense_req = AnnSearchRequest(
+            [query_dense_embedding],
+            "dense_vector",
+            dense_search_params,
+            limit=limit,
+        )
 
-        sparse_search_params = {
-            "metric_type": "IP",
-            "params": {},
-        }
+        sparse_search_params = {"metric_type": "IP", "params": {}}
+        sparse_req = AnnSearchRequest(
+            [query_sparse_embedding],
+            "sparse_vector",
+            sparse_search_params,
+            limit=limit,
+        )
 
-        dense_res = col.search(
-            data=[query_dense_embedding],
-            anns_field="dense_vector",
-            param=dense_search_params,
+        rerank = RRFRanker()
+        res = col.hybrid_search(
+            [sparse_req, dense_req],
+            rerank=rerank,
             limit=limit,
             output_fields=["unique_id"],
         )
-
-        sparse_res = col.search(
-            data=[query_sparse_embedding],
-            anns_field="sparse_vector",
-            param=sparse_search_params,
-            limit=limit,
-            output_fields=["unique_id"],
-        )
-
-        dense_hits = self._convert_milvus_hits(
-            dense_res[0],
-            route=f"{col.name}:dense",
-        )
-
-        sparse_hits = self._convert_milvus_hits(
-            sparse_res[0],
-            route=f"{col.name}:sparse",
-        )
-
-        return dense_hits, sparse_hits
-
-    @staticmethod
-    def _get_hit_uid(hit):
-        """
-        兼容 Milvus hit.get(...) 和 hit.entity.get(...) 两种写法。
-        """
-        uid = None
-
-        try:
-            uid = hit.get("unique_id")
-        except Exception:
-            pass
-
-        if not uid:
-            try:
-                uid = hit.entity.get("unique_id")
-            except Exception:
-                pass
-
-        return uid
-
-    @staticmethod
-    def _get_hit_score(hit) -> float:
-        """
-        兼容 score / distance 字段。
-        IP 越大越相关。
-        """
-        score = getattr(hit, "score", None)
-
-        if score is None:
-            score = getattr(hit, "distance", None)
-
-        if score is None:
-            score = 0.0
-
-        return float(score)
-
-    def _convert_milvus_hits(self, hits, route: str):
-        converted = []
-
-        for rank, hit in enumerate(hits, start=1):
-            uid = self._get_hit_uid(hit)
-
-            if not uid:
-                continue
-
-            converted.append(
-                {
-                    "uid": uid,
-                    "score": self._get_hit_score(hit),
-                    "rank": rank,
-                    "route": route,
-                }
-            )
-
-        return converted
+        return res
 
     # =========================
-    # dense 总列表 + sparse 总列表的全局 RRF
-    # =========================
-    def _rrf_fuse_dense_sparse_hits(
-        self,
-        dense_hits: List[Dict],
-        sparse_hits: List[Dict],
-        limit: int,
-        rrf_k: int = 60,
-    ) -> List[str]:
-        """
-        先分别拼接中英文 dense / sparse 结果，
-        再对 dense 总列表和 sparse 总列表做全局 RRF。
-
-        dense_hits: 中文 dense + 英文 dense
-        sparse_hits: 中文 sparse + 英文 sparse
-        """
-        # 不同 collection 的 dense 分数来自同一个 embedding 模型，通常可以放在一起排序
-        dense_hits = sorted(
-            dense_hits,
-            key=lambda x: x["score"],
-            reverse=True,
-        )
-
-        sparse_hits = sorted(
-            sparse_hits,
-            key=lambda x: x["score"],
-            reverse=True,
-        )
-
-        rrf_scores = defaultdict(float)
-        best_raw_scores = defaultdict(float)
-
-        ranked_lists = [
-            ("dense", dense_hits),
-            ("sparse", sparse_hits),
-        ]
-
-        for _, hits in ranked_lists:
-            seen_in_this_list = set()
-
-            for rank, item in enumerate(hits, start=1):
-                uid = item["uid"]
-
-                if not uid or uid in seen_in_this_list:
-                    continue
-
-                seen_in_this_list.add(uid)
-
-                rrf_scores[uid] += 1.0 / (rrf_k + rank)
-                best_raw_scores[uid] = max(
-                    best_raw_scores[uid],
-                    item.get("score", 0.0),
-                )
-
-        ranked_uids = sorted(
-            rrf_scores.keys(),
-            key=lambda uid: (
-                -rrf_scores[uid],
-                -best_raw_scores[uid],
-            ),
-        )
-
-        return ranked_uids[:limit]
-
-    # =========================
-    # 双路检索：先拼接 dense / sparse，再统一 rerank
+    # 双路检索
     # =========================
     def _dual_route_search(self, query: str, limit: int) -> List[str]:
         """
-        新逻辑：
-
-        中文查询：
-            1. 中文 query 查中文库，得到 zh_dense / zh_sparse
-            2. 中文 query 翻译成英文后查英文库，得到 en_dense / en_sparse
-            3. dense_all = zh_dense + en_dense
-            4. sparse_all = zh_sparse + en_sparse
-            5. 对 dense_all 和 sparse_all 做全局 RRF
-
-        英文查询同理。
+        返回双路召回后的 unique_id 列表（已去重前）
         """
         query_lang = self.detect_text_language(query)
-
-        dense_hits_all: List[Dict] = []
-        sparse_hits_all: List[Dict] = []
+        all_hit_uids: List[str] = []
 
         if query_lang == "zh":
-            zh_dense, zh_sparse = self._search_dense_sparse_one_collection(
-                self.zh_col,
-                query,
-                limit=limit,
-            )
+            # 中文直查中文库
+            zh_res = self._hybrid_search_one_collection(self.zh_col, query, limit=limit)
+            for hit in zh_res[0]:
+                uid = hit.get("unique_id")
+                if uid:
+                    all_hit_uids.append(uid)
 
+            # 中文翻译成英文查英文库
             en_query = self.translator_zh2en.translate(query)
-
-            en_dense, en_sparse = self._search_dense_sparse_one_collection(
-                self.en_col,
-                en_query,
-                limit=limit,
-            )
-
-            dense_hits_all.extend(zh_dense)
-            dense_hits_all.extend(en_dense)
-
-            sparse_hits_all.extend(zh_sparse)
-            sparse_hits_all.extend(en_sparse)
+            en_res = self._hybrid_search_one_collection(self.en_col, en_query, limit=limit)
+            for hit in en_res[0]:
+                uid = hit.get("unique_id")
+                if uid:
+                    all_hit_uids.append(uid)
 
         else:
-            en_dense, en_sparse = self._search_dense_sparse_one_collection(
-                self.en_col,
-                query,
-                limit=limit,
-            )
+            # 英文直查英文库
+            en_res = self._hybrid_search_one_collection(self.en_col, query, limit=limit)
+            for hit in en_res[0]:
+                uid = hit.get("unique_id")
+                if uid:
+                    all_hit_uids.append(uid)
 
+            # 英文翻译成中文查中文库
             zh_query = self.translator_en2zh.translate(query)
-
-            zh_dense, zh_sparse = self._search_dense_sparse_one_collection(
-                self.zh_col,
-                zh_query,
-                limit=limit,
-            )
-
-            dense_hits_all.extend(en_dense)
-            dense_hits_all.extend(zh_dense)
-
-            sparse_hits_all.extend(en_sparse)
-            sparse_hits_all.extend(zh_sparse)
-
-        all_hit_uids = self._rrf_fuse_dense_sparse_hits(
-            dense_hits=dense_hits_all,
-            sparse_hits=sparse_hits_all,
-            limit=limit,
-        )
+            zh_res = self._hybrid_search_one_collection(self.zh_col, zh_query, limit=limit)
+            for hit in zh_res[0]:
+                uid = hit.get("unique_id")
+                if uid:
+                    all_hit_uids.append(uid)
 
         return all_hit_uids
 
@@ -528,17 +311,13 @@ class MilvusRetriever:
     def retrieve_topk(self, query: str, topk: int = 10) -> List[Document]:
         """
         1. 双路 hybrid search
-        2. 根据 uid 从 MongoDB 回查
+        2. 根据 uid 从 Mongo 回查
         3. child / parent 统一映射回 parent
         4. 合并去重
         5. 返回 topk
         """
         fetch_limit = max(topk * 4, topk)
-
-        all_hit_uids = self._dual_route_search(
-            query,
-            limit=fetch_limit,
-        )
+        all_hit_uids = self._dual_route_search(query, limit=fetch_limit)
 
         related_docs = []
         seen_parent_ids = set()
@@ -547,46 +326,27 @@ class MilvusRetriever:
         for hit_uid in all_hit_uids:
             if not hit_uid or hit_uid in seen_hit_uids:
                 continue
-
             seen_hit_uids.add(hit_uid)
 
             search_res = mongo_collection.find_one(
                 {"unique_id": hit_uid},
-                {
-                    "_id": 0,
-                    "page_content": 1,
-                    "metadata": 1,
-                    "unique_id": 1,
-                },
+                {"_id": 0, "page_content": 1, "metadata": 1, "unique_id": 1},
             )
-
             if not search_res:
                 continue
 
             hit_meta = search_res.get("metadata") or {}
-
-            parent_uid = (
-                hit_meta.get("parent_id")
-                or hit_meta.get("unique_id")
-                or hit_uid
-            )
-
+            parent_uid = hit_meta.get("parent_id") or hit_meta.get("unique_id") or hit_uid
             if parent_uid in seen_parent_ids:
                 continue
 
             parent_res = mongo_collection.find_one(
                 {"unique_id": parent_uid},
-                {
-                    "_id": 0,
-                    "page_content": 1,
-                    "metadata": 1,
-                    "unique_id": 1,
-                },
+                {"_id": 0, "page_content": 1, "metadata": 1, "unique_id": 1},
             )
 
             final_res = parent_res or search_res
             final_meta = final_res.get("metadata") or {}
-
             final_uid = (
                 final_meta.get("unique_id")
                 or final_res.get("unique_id")
@@ -602,7 +362,6 @@ class MilvusRetriever:
                 page_content=final_res.get("page_content", ""),
                 metadata=final_meta,
             )
-
             related_docs.append(doc)
 
             if len(related_docs) >= topk:
@@ -611,13 +370,9 @@ class MilvusRetriever:
         return related_docs
 
     # =========================
-    # 调试辅助：获取一个 collection 中所有已索引文档
+    # 调试辅助：获取所有已索引文档
     # =========================
-    def _get_all_indexed_docs_from_one_collection(
-        self,
-        col: Collection,
-        batch_size: int = 1000,
-    ):
+    def _get_all_indexed_docs_from_one_collection(self, col: Collection, batch_size: int = 1000):
         all_docs = []
         offset = 0
 
@@ -632,31 +387,18 @@ class MilvusRetriever:
             if not results:
                 break
 
-            unique_ids = [
-                item.get("unique_id")
-                for item in results
-                if item.get("unique_id")
-            ]
-
+            unique_ids = [item.get("unique_id") for item in results if item.get("unique_id")]
             if not unique_ids:
                 break
 
             mongo_results = list(
                 mongo_collection.find(
                     {"unique_id": {"$in": unique_ids}},
-                    {
-                        "_id": 0,
-                        "page_content": 1,
-                        "metadata": 1,
-                        "unique_id": 1,
-                    },
+                    {"_id": 0, "page_content": 1, "metadata": 1, "unique_id": 1},
                 )
             )
 
-            mongo_map = {
-                item["unique_id"]: item
-                for item in mongo_results
-            }
+            mongo_map = {item["unique_id"]: item for item in mongo_results}
 
             for uid in unique_ids:
                 item = mongo_map.get(uid)
@@ -678,47 +420,18 @@ class MilvusRetriever:
         return all_docs
 
     def get_all_indexed_docs(self, batch_size: int = 1000):
-        zh_docs = self._get_all_indexed_docs_from_one_collection(
-            self.zh_col,
-            batch_size=batch_size,
-        )
-        en_docs = self._get_all_indexed_docs_from_one_collection(
-            self.en_col,
-            batch_size=batch_size,
-        )
-
+        zh_docs = self._get_all_indexed_docs_from_one_collection(self.zh_col, batch_size=batch_size)
+        en_docs = self._get_all_indexed_docs_from_one_collection(self.en_col, batch_size=batch_size)
         return zh_docs + en_docs
-
-    # =========================
-    # 调试辅助：打印当前索引信息
-    # =========================
-    def print_index_info(self):
-        print("中文 collection 索引信息：")
-        for index in self.zh_col.indexes:
-            print(index)
-
-        print("英文 collection 索引信息：")
-        for index in self.en_col.indexes:
-            print(index)
 
 
 if __name__ == "__main__":
-    texts = [
-        k.strip()
-        for k in open(test_doc_path, encoding="utf-8").readlines()
-        if k.strip()
-    ]
-
+    texts = [k.strip() for k in open(test_doc_path, encoding="utf-8").readlines() if k.strip()]
     docs = []
 
     source = test_doc_path
-
     for text in texts:
-        unique_id = build_unique_id(
-            source,
-            text,
-            chunk_type="demo",
-        )
+        unique_id = build_unique_id(source, text, chunk_type="demo")
 
         # 自动判断文档语言
         lang = MilvusRetriever.detect_text_language(text)
@@ -728,30 +441,14 @@ if __name__ == "__main__":
             "source": source,
             "chunk_type": "demo",
             "lang": lang,
-            "content_hash": hashlib.md5(
-                text.encode("utf-8")
-            ).hexdigest(),
+            "content_hash": hashlib.md5(text.encode("utf-8")).hexdigest(),
         }
+        docs.append(Document(page_content=text, metadata=metadata))
 
-        docs.append(
-            Document(
-                page_content=text,
-                metadata=metadata,
-            )
-        )
-
-    # 第一次从 AUTOINDEX 改成 HNSW 时，建议 rebuild=True
-    # 否则如果旧 collection 已经存在，可能不会重新创建索引
-    retriever = MilvusRetriever(
-        docs=docs,
-        rebuild=True,
-    )
-
-    retriever.print_index_info()
+    retriever = MilvusRetriever(docs=docs, rebuild=False)
 
     query = "Model3支持的钥匙类型"
     results = retriever.retrieve_topk(query, topk=2)
-
     print("中文问题检索结果：")
     for res in results:
         print(res)
@@ -759,7 +456,6 @@ if __name__ == "__main__":
 
     query2 = "What key types are supported by Model 3?"
     results2 = retriever.retrieve_topk(query2, topk=2)
-
     print("英文问题检索结果：")
     for res in results2:
         print(res)
