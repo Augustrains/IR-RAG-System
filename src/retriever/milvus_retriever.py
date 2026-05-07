@@ -270,25 +270,26 @@ class MilvusRetriever:
         col.flush()
         return total_inserted
 
-    # =========================
-    # 单路 hybrid search
-    # =========================
-    def _hybrid_search_one_collection(
+     def _search_dense_sparse_one_collection(
         self,
         col: Collection,
         query: str,
         limit: int = 10,
     ):
+        """
+        对单个 collection 分别执行 dense 检索和 sparse 检索。
+        返回：
+            dense_hits: [{"uid": ..., "score": ..., "route": ...}, ...]
+            sparse_hits: [{"uid": ..., "score": ..., "route": ...}, ...]
+        """
         if not query.strip():
-            return [[]]
+            return [], []
 
         query_embedding = embedding_handler.encode_queries([query])
 
         query_dense_embedding = query_embedding["dense"][0]
         query_sparse_embedding = query_embedding["sparse"][[0]]
 
-        # dense_vector：HNSW 查询参数
-        # ef：查询阶段候选搜索范围，越大召回率越高，但查询耗时越长
         dense_search_params = {
             "metric_type": "IP",
             "params": {
@@ -296,107 +297,228 @@ class MilvusRetriever:
             },
         }
 
-        dense_req = AnnSearchRequest(
-            [query_dense_embedding],
-            "dense_vector",
-            dense_search_params,
-            limit=limit,
-        )
-
-        # sparse_vector：稀疏倒排索引查询参数
         sparse_search_params = {
             "metric_type": "IP",
             "params": {},
         }
 
-        sparse_req = AnnSearchRequest(
-            [query_sparse_embedding],
-            "sparse_vector",
-            sparse_search_params,
-            limit=limit,
-        )
-
-        # RRF 融合 sparse 和 dense 两路召回结果
-        rerank = RRFRanker()
-
-        res = col.hybrid_search(
-            [sparse_req, dense_req],
-            rerank=rerank,
+        dense_res = col.search(
+            data=[query_dense_embedding],
+            anns_field="dense_vector",
+            param=dense_search_params,
             limit=limit,
             output_fields=["unique_id"],
         )
 
-        return res
+        sparse_res = col.search(
+            data=[query_sparse_embedding],
+            anns_field="sparse_vector",
+            param=sparse_search_params,
+            limit=limit,
+            output_fields=["unique_id"],
+        )
+
+        dense_hits = self._convert_milvus_hits(
+            dense_res[0],
+            route=f"{col.name}:dense",
+        )
+
+        sparse_hits = self._convert_milvus_hits(
+            sparse_res[0],
+            route=f"{col.name}:sparse",
+        )
+
+        return dense_hits, sparse_hits
+
+    @staticmethod
+    def _get_hit_uid(hit):
+        """
+        兼容 Milvus hit.get(...) 和 hit.entity.get(...) 两种写法。
+        """
+        uid = None
+
+        try:
+            uid = hit.get("unique_id")
+        except Exception:
+            pass
+
+        if not uid:
+            try:
+                uid = hit.entity.get("unique_id")
+            except Exception:
+                pass
+
+        return uid
+
+    @staticmethod
+    def _get_hit_score(hit) -> float:
+        """
+        兼容 score / distance 字段。
+        IP 越大越相关。
+        """
+        score = getattr(hit, "score", None)
+
+        if score is None:
+            score = getattr(hit, "distance", None)
+
+        if score is None:
+            score = 0.0
+
+        return float(score)
+
+    def _convert_milvus_hits(self, hits, route: str):
+        converted = []
+
+        for rank, hit in enumerate(hits, start=1):
+            uid = self._get_hit_uid(hit)
+
+            if not uid:
+                continue
+
+            converted.append(
+                {
+                    "uid": uid,
+                    "score": self._get_hit_score(hit),
+                    "rank": rank,
+                    "route": route,
+                }
+            )
+
+        return converted
 
     # =========================
-    # 双路检索
+    # dense 总列表 + sparse 总列表的全局 RRF
+    # =========================
+    def _rrf_fuse_dense_sparse_hits(
+        self,
+        dense_hits: List[Dict],
+        sparse_hits: List[Dict],
+        limit: int,
+        rrf_k: int = 60,
+    ) -> List[str]:
+        """
+        先分别拼接中英文 dense / sparse 结果，
+        再对 dense 总列表和 sparse 总列表做全局 RRF。
+
+        dense_hits: 中文 dense + 英文 dense
+        sparse_hits: 中文 sparse + 英文 sparse
+        """
+        # 不同 collection 的 dense 分数来自同一个 embedding 模型，通常可以放在一起排序
+        dense_hits = sorted(
+            dense_hits,
+            key=lambda x: x["score"],
+            reverse=True,
+        )
+
+        sparse_hits = sorted(
+            sparse_hits,
+            key=lambda x: x["score"],
+            reverse=True,
+        )
+
+        rrf_scores = defaultdict(float)
+        best_raw_scores = defaultdict(float)
+
+        ranked_lists = [
+            ("dense", dense_hits),
+            ("sparse", sparse_hits),
+        ]
+
+        for _, hits in ranked_lists:
+            seen_in_this_list = set()
+
+            for rank, item in enumerate(hits, start=1):
+                uid = item["uid"]
+
+                if not uid or uid in seen_in_this_list:
+                    continue
+
+                seen_in_this_list.add(uid)
+
+                rrf_scores[uid] += 1.0 / (rrf_k + rank)
+                best_raw_scores[uid] = max(
+                    best_raw_scores[uid],
+                    item.get("score", 0.0),
+                )
+
+        ranked_uids = sorted(
+            rrf_scores.keys(),
+            key=lambda uid: (
+                -rrf_scores[uid],
+                -best_raw_scores[uid],
+            ),
+        )
+
+        return ranked_uids[:limit]
+
+    # =========================
+    # 双路检索：先拼接 dense / sparse，再统一 rerank
     # =========================
     def _dual_route_search(self, query: str, limit: int) -> List[str]:
         """
-        返回双路召回后的 unique_id 列表。
+        新逻辑：
+
         中文查询：
-            1. 中文 query 查中文库
-            2. 中文 query 翻译成英文后查英文库
-        英文查询：
-            1. 英文 query 查英文库
-            2. 英文 query 翻译成中文后查中文库
+            1. 中文 query 查中文库，得到 zh_dense / zh_sparse
+            2. 中文 query 翻译成英文后查英文库，得到 en_dense / en_sparse
+            3. dense_all = zh_dense + en_dense
+            4. sparse_all = zh_sparse + en_sparse
+            5. 对 dense_all 和 sparse_all 做全局 RRF
+
+        英文查询同理。
         """
         query_lang = self.detect_text_language(query)
-        all_hit_uids: List[str] = []
+
+        dense_hits_all: List[Dict] = []
+        sparse_hits_all: List[Dict] = []
 
         if query_lang == "zh":
-            # 中文直查中文库
-            zh_res = self._hybrid_search_one_collection(
+            zh_dense, zh_sparse = self._search_dense_sparse_one_collection(
                 self.zh_col,
                 query,
                 limit=limit,
             )
 
-            for hit in zh_res[0]:
-                uid = hit.get("unique_id")
-                if uid:
-                    all_hit_uids.append(uid)
-
-            # 中文翻译成英文后查英文库
             en_query = self.translator_zh2en.translate(query)
 
-            en_res = self._hybrid_search_one_collection(
+            en_dense, en_sparse = self._search_dense_sparse_one_collection(
                 self.en_col,
                 en_query,
                 limit=limit,
             )
 
-            for hit in en_res[0]:
-                uid = hit.get("unique_id")
-                if uid:
-                    all_hit_uids.append(uid)
+            dense_hits_all.extend(zh_dense)
+            dense_hits_all.extend(en_dense)
+
+            sparse_hits_all.extend(zh_sparse)
+            sparse_hits_all.extend(en_sparse)
 
         else:
-            # 英文直查英文库
-            en_res = self._hybrid_search_one_collection(
+            en_dense, en_sparse = self._search_dense_sparse_one_collection(
                 self.en_col,
                 query,
                 limit=limit,
             )
 
-            for hit in en_res[0]:
-                uid = hit.get("unique_id")
-                if uid:
-                    all_hit_uids.append(uid)
-
-            # 英文翻译成中文后查中文库
             zh_query = self.translator_en2zh.translate(query)
 
-            zh_res = self._hybrid_search_one_collection(
+            zh_dense, zh_sparse = self._search_dense_sparse_one_collection(
                 self.zh_col,
                 zh_query,
                 limit=limit,
             )
 
-            for hit in zh_res[0]:
-                uid = hit.get("unique_id")
-                if uid:
-                    all_hit_uids.append(uid)
+            dense_hits_all.extend(en_dense)
+            dense_hits_all.extend(zh_dense)
+
+            sparse_hits_all.extend(en_sparse)
+            sparse_hits_all.extend(zh_sparse)
+
+        all_hit_uids = self._rrf_fuse_dense_sparse_hits(
+            dense_hits=dense_hits_all,
+            sparse_hits=sparse_hits_all,
+            limit=limit,
+        )
 
         return all_hit_uids
 
