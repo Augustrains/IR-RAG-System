@@ -1,0 +1,18 @@
+{
+  "run_id": "20260329_230218_case2_old_retriever_base_qa_test_augmented_with_neg_alpaca",
+  "generated_at": "2026-03-29T23:02:43",
+  "summary": {
+    "sample_count": 393,
+    "retriever_enabled": true,
+    "retrievers": [
+      "old_bm25",
+      "old_milvus"
+    ],
+    "reranker_enabled": false,
+    "reranker": "",
+    "avg_retrieval_time_seconds": 0.06480304575726656,
+    "avg_rerank_time_seconds": 0.0,
+    "avg_prompt_build_time_seconds": 2.9430151194258198e-05,
+    "avg_total_time_seconds": 0.06483691616064416
+  }
+}
